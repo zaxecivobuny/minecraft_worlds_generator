@@ -48,16 +48,23 @@ class MinecraftWorldGenerator:
         Initialize the generator.
         
         Args:
-            minecraft_dir: Path to .minecraft directory. If None, uses ~/.minecraft
+            minecraft_dir: Path to .minecraft directory. If None, uses default Windows/Unix location
         """
         if minecraft_dir is None:
-            minecraft_dir = os.path.expanduser("~/.minecraft")
+            # Windows: C:\Users\<username>\AppData\Roaming\.minecraft
+            # Unix/Linux: ~/.minecraft
+            if sys.platform == "win32":
+                minecraft_dir = os.path.expanduser("~\\AppData\\Roaming\\.minecraft")
+            else:
+                minecraft_dir = os.path.expanduser("~/.minecraft")
         
         self.minecraft_dir = Path(minecraft_dir)
         self.saves_dir = self.minecraft_dir / "saves"
         
         if not self.saves_dir.exists():
-            print(f"ERROR: {self.saves_dir} not found. Is Minecraft installed?")
+            print(f"ERROR: {self.saves_dir} not found.")
+            print(f"Expected Minecraft at: {self.minecraft_dir}")
+            print(f"Is Minecraft installed? Check your .minecraft location.")
             sys.exit(1)
     
     def create_level_dat(self, seed: int, world_name: str) -> bytes:
