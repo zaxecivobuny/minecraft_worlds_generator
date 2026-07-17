@@ -14,12 +14,13 @@ from typing import List, Dict, Any
 from datetime import datetime
 import subprocess
 
-# Try to import pynbt; if missing, provide install instructions
+# Try to import nbtlib; if missing, provide install instructions
 try:
-    from nbt.nbt import NBTFile, TAG_Compound, TAG_Long, TAG_Int, TAG_String, TAG_Byte, TAG_List, TAG_Double
+    from nbtlib import load, save, TAG_Compound, TAG_Long, TAG_Int, TAG_String, TAG_Byte, TAG_List, TAG_Double
+    from nbtlib.tag import TAG_Byte_Array
 except ImportError:
-    print("ERROR: pynbt not found. Install it with:")
-    print("  pip install pynbt")
+    print("ERROR: nbtlib not found. Install it with:")
+    print("  pip install nbtlib")
     sys.exit(1)
 
 
@@ -71,68 +72,50 @@ class MinecraftWorldGenerator:
         Returns:
             Gzipped NBT data as bytes
         """
-        root = TAG_Compound(name="")
+        # Build the NBT structure using nbtlib
+        data = {
+            "Seed": TAG_Long(seed),
+            "GameType": TAG_Int(self.SETTINGS["gamemode"]),
+            "Difficulty": TAG_Int(self.SETTINGS["difficulty"]),
+            "DifficultyLocked": TAG_Byte(0),
+            "Hardcore": TAG_Byte(self.SETTINGS["hardcore"]),
+            "LevelName": TAG_String(world_name),
+            "LastPlayed": TAG_Long(int(datetime.now().timestamp() * 1000)),
+            "Time": TAG_Long(0),
+            "DayTime": TAG_Long(0),
+            "SpawnX": TAG_Int(0),
+            "SpawnY": TAG_Int(64),
+            "SpawnZ": TAG_Int(0),
+            "GameRules": TAG_Compound({
+                "commandBlockOutput": TAG_String("1"),
+                "doCommandBlocks": TAG_String("1" if self.SETTINGS["allow_commands"] else "0"),
+                "doDayLightCycle": TAG_String("1"),
+                "doEntityDrops": TAG_String("1"),
+                "doFireTick": TAG_String("1"),
+                "doMobSpawning": TAG_String("1" if self.SETTINGS["spawn_mobs"] else "0"),
+                "doTileDrops": TAG_String("1"),
+                "keepInventory": TAG_String("1" if self.SETTINGS["retain_inventory_on_death"] else "0"),
+                "logAdminCommands": TAG_String("1"),
+                "mobGriefing": TAG_String("1"),
+                "pvp": TAG_String("1" if self.SETTINGS["pvp"] else "0"),
+                "randomTickSpeed": TAG_String("3"),
+                "sendCommandFeedback": TAG_String("1"),
+                "showDeathMessages": TAG_String("1"),
+                "spawnAnimals": TAG_String("1" if self.SETTINGS["spawn_animals"] else "0"),
+                "spawnMonsters": TAG_String("1" if self.SETTINGS["spawn_mobs"] else "0"),
+                "spawnNPCs": TAG_String("1" if self.SETTINGS["spawn_npc"] else "0"),
+            }),
+            "Version": TAG_Compound({
+                "Id": TAG_Int(3107),
+                "Name": TAG_String("1.20.1"),
+            }),
+            "WorldGenSettings": TAG_Compound({}),
+        }
         
-        # Root tags
-        data = TAG_Compound(name="Data")
-        root.tags.append(data)
+        root = TAG_Compound({"": TAG_Compound(data)})
         
-        # World seed
-        data.tags.append(TAG_Long(name="Seed", value=seed))
-        
-        # Game rules
-        game_rules = TAG_Compound(name="GameRules")
-        game_rules.tags.append(TAG_String(name="commandBlockOutput", value="1"))
-        game_rules.tags.append(TAG_String(name="doCommandBlocks", value="1" if self.SETTINGS["allow_commands"] else "0"))
-        game_rules.tags.append(TAG_String(name="doDayLightCycle", value="1"))
-        game_rules.tags.append(TAG_String(name="doEntityDrops", value="1"))
-        game_rules.tags.append(TAG_String(name="doFireTick", value="1"))
-        game_rules.tags.append(TAG_String(name="doMobSpawning", value="1" if self.SETTINGS["spawn_mobs"] else "0"))
-        game_rules.tags.append(TAG_String(name="doTileDrops", value="1"))
-        game_rules.tags.append(TAG_String(name="keepInventory", value="1" if self.SETTINGS["retain_inventory_on_death"] else "0"))
-        game_rules.tags.append(TAG_String(name="logAdminCommands", value="1"))
-        game_rules.tags.append(TAG_String(name="mobGriefing", value="1"))
-        game_rules.tags.append(TAG_String(name="pvp", value="1" if self.SETTINGS["pvp"] else "0"))
-        game_rules.tags.append(TAG_String(name="randomTickSpeed", value="3"))
-        game_rules.tags.append(TAG_String(name="sendCommandFeedback", value="1"))
-        game_rules.tags.append(TAG_String(name="showDeathMessages", value="1"))
-        game_rules.tags.append(TAG_String(name="spawnAnimals", value="1" if self.SETTINGS["spawn_animals"] else "0"))
-        game_rules.tags.append(TAG_String(name="spawnMonsters", value="1" if self.SETTINGS["spawn_mobs"] else "0"))
-        game_rules.tags.append(TAG_String(name="spawnNPCs", value="1" if self.SETTINGS["spawn_npc"] else "0"))
-        data.tags.append(game_rules)
-        
-        # World settings
-        data.tags.append(TAG_Int(name="GameType", value=self.SETTINGS["gamemode"]))
-        data.tags.append(TAG_Int(name="Difficulty", value=self.SETTINGS["difficulty"]))
-        data.tags.append(TAG_Byte(name="DifficultyLocked", value=0))
-        data.tags.append(TAG_Byte(name="Hardcore", value=self.SETTINGS["hardcore"]))
-        data.tags.append(TAG_String(name="LevelName", value=world_name))
-        data.tags.append(TAG_Long(name="LastPlayed", value=int(datetime.now().timestamp() * 1000)))
-        data.tags.append(TAG_Long(name="Time", value=0))
-        data.tags.append(TAG_Long(name="DayTime", value=0))
-        
-        # Spawn point
-        data.tags.append(TAG_Int(name="SpawnX", value=0))
-        data.tags.append(TAG_Int(name="SpawnY", value=64))
-        data.tags.append(TAG_Int(name="SpawnZ", value=0))
-        
-        # Version info (adjust for your MC version)
-        version = TAG_Compound(name="Version")
-        version.tags.append(TAG_Int(name="Id", value=3107))  # Update based on your version
-        version.tags.append(TAG_String(name="Name", value="1.20.1"))  # Update based on your version
-        data.tags.append(version)
-        
-        # World generation settings
-        world_gen = TAG_Compound(name="WorldGenSettings")
-        
-        # Noise settings (simplified)
-        noise_settings = TAG_Compound(name="noise")
-        world_gen.tags.append(noise_settings)
-        
-        data.tags.append(world_gen)
-        
-        # Convert to bytes
-        nbt_bytes = root.save(compressed=True)
+        # Save to bytes with gzip compression
+        nbt_bytes = root.save(gzipped=True)
         return nbt_bytes
     
     def create_world(self, seed: int, world_name: str = None) -> Path:
