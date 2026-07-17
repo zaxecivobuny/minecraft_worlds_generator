@@ -16,8 +16,7 @@ import subprocess
 
 # Try to import nbtlib; if missing, provide install instructions
 try:
-    from nbtlib import load, save, TAG_Compound, TAG_Long, TAG_Int, TAG_String, TAG_Byte, TAG_List, TAG_Double
-    from nbtlib.tag import TAG_Byte_Array
+    import nbtlib
 except ImportError:
     print("ERROR: nbtlib not found. Install it with:")
     print("  pip install nbtlib")
@@ -72,51 +71,54 @@ class MinecraftWorldGenerator:
         Returns:
             Gzipped NBT data as bytes
         """
-        # Build the NBT structure using nbtlib
-        data = {
-            "Seed": TAG_Long(seed),
-            "GameType": TAG_Int(self.SETTINGS["gamemode"]),
-            "Difficulty": TAG_Int(self.SETTINGS["difficulty"]),
-            "DifficultyLocked": TAG_Byte(0),
-            "Hardcore": TAG_Byte(self.SETTINGS["hardcore"]),
-            "LevelName": TAG_String(world_name),
-            "LastPlayed": TAG_Long(int(datetime.now().timestamp() * 1000)),
-            "Time": TAG_Long(0),
-            "DayTime": TAG_Long(0),
-            "SpawnX": TAG_Int(0),
-            "SpawnY": TAG_Int(64),
-            "SpawnZ": TAG_Int(0),
-            "GameRules": TAG_Compound({
-                "commandBlockOutput": TAG_String("1"),
-                "doCommandBlocks": TAG_String("1" if self.SETTINGS["allow_commands"] else "0"),
-                "doDayLightCycle": TAG_String("1"),
-                "doEntityDrops": TAG_String("1"),
-                "doFireTick": TAG_String("1"),
-                "doMobSpawning": TAG_String("1" if self.SETTINGS["spawn_mobs"] else "0"),
-                "doTileDrops": TAG_String("1"),
-                "keepInventory": TAG_String("1" if self.SETTINGS["retain_inventory_on_death"] else "0"),
-                "logAdminCommands": TAG_String("1"),
-                "mobGriefing": TAG_String("1"),
-                "pvp": TAG_String("1" if self.SETTINGS["pvp"] else "0"),
-                "randomTickSpeed": TAG_String("3"),
-                "sendCommandFeedback": TAG_String("1"),
-                "showDeathMessages": TAG_String("1"),
-                "spawnAnimals": TAG_String("1" if self.SETTINGS["spawn_animals"] else "0"),
-                "spawnMonsters": TAG_String("1" if self.SETTINGS["spawn_mobs"] else "0"),
-                "spawnNPCs": TAG_String("1" if self.SETTINGS["spawn_npc"] else "0"),
-            }),
-            "Version": TAG_Compound({
-                "Id": TAG_Int(3107),
-                "Name": TAG_String("1.20.1"),
-            }),
-            "WorldGenSettings": TAG_Compound({}),
+        import io
+        
+        # Build the NBT structure as nested dicts
+        nbt_data = {
+            "Data": {
+                "Seed": seed,
+                "GameType": self.SETTINGS["gamemode"],
+                "Difficulty": self.SETTINGS["difficulty"],
+                "DifficultyLocked": self.SETTINGS["difficulty"],
+                "Hardcore": self.SETTINGS["hardcore"],
+                "LevelName": world_name,
+                "LastPlayed": int(datetime.now().timestamp() * 1000),
+                "Time": 0,
+                "DayTime": 0,
+                "SpawnX": 0,
+                "SpawnY": 64,
+                "SpawnZ": 0,
+                "GameRules": {
+                    "commandBlockOutput": "1",
+                    "doCommandBlocks": "1" if self.SETTINGS["allow_commands"] else "0",
+                    "doDayLightCycle": "1",
+                    "doEntityDrops": "1",
+                    "doFireTick": "1",
+                    "doMobSpawning": "1" if self.SETTINGS["spawn_mobs"] else "0",
+                    "doTileDrops": "1",
+                    "keepInventory": "1" if self.SETTINGS["retain_inventory_on_death"] else "0",
+                    "logAdminCommands": "1",
+                    "mobGriefing": "1",
+                    "pvp": "1" if self.SETTINGS["pvp"] else "0",
+                    "randomTickSpeed": "3",
+                    "sendCommandFeedback": "1",
+                    "showDeathMessages": "1",
+                    "spawnAnimals": "1" if self.SETTINGS["spawn_animals"] else "0",
+                    "spawnMonsters": "1" if self.SETTINGS["spawn_mobs"] else "0",
+                    "spawnNPCs": "1" if self.SETTINGS["spawn_npc"] else "0",
+                },
+                "Version": {
+                    "Id": 3107,
+                    "Name": "1.20.1",
+                },
+                "WorldGenSettings": {},
+            }
         }
         
-        root = TAG_Compound({"": TAG_Compound(data)})
-        
-        # Save to bytes with gzip compression
-        nbt_bytes = root.save(gzipped=True)
-        return nbt_bytes
+        # Save using nbtlib
+        output = io.BytesIO()
+        nbtlib.save(nbt_data, output, gzipped=True)
+        return output.getvalue()
     
     def create_world(self, seed: int, world_name: str = None) -> Path:
         """
