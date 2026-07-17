@@ -2,301 +2,255 @@
 """
 Minecraft Java Edition Single-Player World Generator
 Automatically creates worlds from a list of seeds with predefined categorical settings.
+
+Requires: nbtlib  (pip install nbtlib)
 """
 
 import os
 import sys
-import struct
-import gzip
-import json
-from pathlib import Path
-from typing import List, Dict, Any
-from datetime import datetime
-import subprocess
 import io
+import gzip
+from pathlib import Path
+from typing import List
+from datetime import datetime
 
-# No external dependencies needed - using manual NBT binary encoding
+try:
+    import nbtlib
+    from nbtlib import File, Compound, Long, Int, Byte, String, Float
+except ImportError:
+    print("ERROR: nbtlib not found. Install it with:")
+    print("  pip install nbtlib")
+    sys.exit(1)
+
+
+# ---------------------------------------------------------------------------
+# Minecraft version -> DataVersion lookup.
+# The DataVersion MUST be <= your installed Minecraft version, or the world
+# will show "Failed to load world summary". Set MINECRAFT_VERSION below to
+# match the version you actually play.
+# ---------------------------------------------------------------------------
+DATA_VERSIONS = {
+    "1.20":   3463,
+    "1.20.1": 3465,
+    "1.20.2": 3578,
+    "1.20.4": 3700,
+    "1.20.6": 3839,
+    "1.21":   3953,
+    "1.21.1": 3955,
+    "1.21.4": 4189,
+    "1.21.5": 4325,
+    # New year.drop versioning (started 26.1, Dec 2025 scheme)
+    "26.1.2": 4790,
+    "26.2":   4903,
+}
 
 
 class MinecraftWorldGenerator:
     """Generate Minecraft Java Edition worlds from seeds with fixed settings."""
-    
+
+    # ---- Set this to match the Minecraft version you play ----
+    MINECRAFT_VERSION = "26.2"
+
     # Categorical settings - modify these for your worlds
     SETTINGS = {
-        "gamemode": 0,              # 0=Survival, 1=Creative, 2=Adventure, 3=Spectator
-        "difficulty": 2,             # 0=Peaceful, 1=Easy, 2=Normal, 3=Hard
-        "allow_commands": 1,         # 0=False, 1=True
-        "pvp": 1,                    # 0=False, 1=True
-        "spawn_mobs": 1,             # 0=False, 1=True
-        "spawn_animals": 1,          # 0=False, 1=True
-        "spawn_npc": 1,              # 0=False, 1=True
-        "hardcore": 0,               # 0=False, 1=True
+        "gamemode": 0,                   # 0=Survival, 1=Creative, 2=Adventure, 3=Spectator
+        "difficulty": 2,                 # 0=Peaceful, 1=Easy, 2=Normal, 3=Hard
+        "allow_commands": 0,             # 0=False, 1=True
+        "pvp": 1,                        # 0=False, 1=True
+        "spawn_mobs": 1,                 # 0=False, 1=True
+        "spawn_animals": 1,              # 0=False, 1=True
+        "spawn_npc": 1,                  # 0=False, 1=True
+        "hardcore": 0,                   # 0=False, 1=True
         "retain_inventory_on_death": 0,  # 0=False (drop on death), 1=True (keep inventory)
-        "structures": 1,             # 0=False, 1=True (temples, strongholds, etc)
-        "water_lake_chance": 1,      # 1-100, water lake generation frequency
-        "lava_lake_chance": 2,       # 1-100, lava lake generation frequency
-        "dungeon_chance": 1,         # 1-100, dungeon generation frequency
+        "generate_structures": 1,        # 0=False, 1=True (villages, temples, strongholds, etc)
     }
-    
+
     def __init__(self, minecraft_dir: str = None):
         """
         Initialize the generator.
-        
+
         Args:
-            minecraft_dir: Path to .minecraft directory. If None, uses default Windows/Unix location
+            minecraft_dir: Path to .minecraft directory. If None, auto-detects
+                           per-platform (AppData\\Roaming on Windows, ~ on Unix).
         """
         if minecraft_dir is None:
-            # Windows: C:\Users\<username>\AppData\Roaming\.minecraft
-            # Unix/Linux: ~/.minecraft
             if sys.platform == "win32":
-                minecraft_dir = os.path.expanduser("~\\AppData\\Roaming\\.minecraft")
+                minecraft_dir = os.path.join(
+                    os.environ.get("APPDATA", os.path.expanduser("~")), ".minecraft"
+                )
+            elif sys.platform == "darwin":
+                minecraft_dir = os.path.expanduser(
+                    "~/Library/Application Support/minecraft"
+                )
             else:
                 minecraft_dir = os.path.expanduser("~/.minecraft")
-        
+
         self.minecraft_dir = Path(minecraft_dir)
         self.saves_dir = self.minecraft_dir / "saves"
-        
+
+        if self.MINECRAFT_VERSION not in DATA_VERSIONS:
+            print(f"ERROR: Unknown Minecraft version '{self.MINECRAFT_VERSION}'.")
+            print(f"Known versions: {', '.join(DATA_VERSIONS)}")
+            sys.exit(1)
+
+        self.data_version = DATA_VERSIONS[self.MINECRAFT_VERSION]
+
         if not self.saves_dir.exists():
             print(f"ERROR: {self.saves_dir} not found.")
             print(f"Expected Minecraft at: {self.minecraft_dir}")
-            print(f"Is Minecraft installed? Check your .minecraft location.")
+            print("Is Minecraft installed and has it been run at least once?")
             sys.exit(1)
-    
-    def _write_nbt_tag(self, name: str, value: Any) -> bytes:
-        """Manually encode a single NBT tag to bytes."""
-        buf = io.BytesIO()
-        
-        if isinstance(value, dict):
-            # TAG_Compound
-            buf.write(b'\x0a')  # Tag type 10 = Compound
-            self._write_string(buf, name)
-            for k, v in value.items():
-                buf.write(self._write_nbt_tag(k, v))
-            buf.write(b'\x00')  # End tag
-        elif isinstance(value, str):
-            # TAG_String
-            buf.write(b'\x08')  # Tag type 8 = String
-            self._write_string(buf, name)
-            self._write_string(buf, value)
-        elif isinstance(value, int):
-            # TAG_Long or TAG_Int (use Long for large values)
-            buf.write(b'\x04')  # Tag type 4 = Int
-            self._write_string(buf, name)
-            buf.write(struct.pack('>i', value))
-        
-        return buf.getvalue()
-    
-    def _write_string(self, buf: io.BytesIO, s: str):
-        """Write a UTF-8 string with 2-byte length prefix."""
-        encoded = s.encode('utf-8')
-        buf.write(struct.pack('>H', len(encoded)))
-        buf.write(encoded)
-    
+
     def create_level_dat(self, seed: int, world_name: str) -> bytes:
         """
-        Create a level.dat file (NBT format) for the given seed.
-        
-        Args:
-            seed: Minecraft world seed (int)
-            world_name: Name of the world
-            
-        Returns:
-            Gzipped NBT data as bytes
+        Build a gzipped level.dat (NBT) for the given seed.
+
+        The structure follows the modern (1.16+) level format:
+          - seed lives in Data.WorldGenSettings.seed
+          - game rules are "true"/"false" strings
+          - DataVersion is present in both Data.DataVersion and Data.Version.Id
         """
-        buf = io.BytesIO()
-        
-        # TAG_Compound (root)
-        buf.write(b'\x0a')  # Tag type 10 = Compound
-        self._write_string(buf, "")  # Root name is empty
-        
-        # Data compound
-        buf.write(b'\x0a')  # Compound tag
-        self._write_string(buf, "Data")
-        
-        # Write individual tags
-        buf.write(b'\x03')  # TAG_Int
-        self._write_string(buf, "GameType")
-        buf.write(struct.pack('>i', self.SETTINGS["gamemode"]))
-        
-        buf.write(b'\x01')  # TAG_Byte
-        self._write_string(buf, "Difficulty")
-        buf.write(struct.pack('B', self.SETTINGS["difficulty"]))
-        
-        buf.write(b'\x01')  # TAG_Byte
-        self._write_string(buf, "Hardcore")
-        buf.write(struct.pack('B', self.SETTINGS["hardcore"]))
-        
-        buf.write(b'\x08')  # TAG_String
-        self._write_string(buf, "LevelName")
-        self._write_string(buf, world_name)
-        
-        buf.write(b'\x04')  # TAG_Long (seed as int for now)
-        self._write_string(buf, "Seed")
-        buf.write(struct.pack('>q', seed))  # 8-byte long
-        
-        buf.write(b'\x04')  # TAG_Long
-        self._write_string(buf, "Time")
-        buf.write(struct.pack('>q', 0))
-        
-        buf.write(b'\x04')  # TAG_Long
-        self._write_string(buf, "DayTime")
-        buf.write(struct.pack('>q', 0))
-        
-        buf.write(b'\x04')  # TAG_Long
-        self._write_string(buf, "LastPlayed")
-        buf.write(struct.pack('>q', int(datetime.now().timestamp() * 1000)))
-        
-        buf.write(b'\x03')  # TAG_Int
-        self._write_string(buf, "SpawnX")
-        buf.write(struct.pack('>i', 0))
-        
-        buf.write(b'\x03')  # TAG_Int
-        self._write_string(buf, "SpawnY")
-        buf.write(struct.pack('>i', 64))
-        
-        buf.write(b'\x03')  # TAG_Int
-        self._write_string(buf, "SpawnZ")
-        buf.write(struct.pack('>i', 0))
-        
-        # GameRules compound
-        buf.write(b'\x0a')  # Compound
-        self._write_string(buf, "GameRules")
-        
-        # Write game rules
-        rules = {
-            "keepInventory": "1" if self.SETTINGS["retain_inventory_on_death"] else "0",
-            "doMobSpawning": "1" if self.SETTINGS["spawn_mobs"] else "0",
-            "pvp": "1" if self.SETTINGS["pvp"] else "0",
-        }
-        
-        for rule_name, rule_value in rules.items():
-            buf.write(b'\x08')  # TAG_String
-            self._write_string(buf, rule_name)
-            self._write_string(buf, rule_value)
-        
-        buf.write(b'\x00')  # End tag for GameRules
-        
-        # Version compound
-        buf.write(b'\x0a')  # Compound
-        self._write_string(buf, "Version")
-        
-        buf.write(b'\x03')  # TAG_Int
-        self._write_string(buf, "Id")
-        buf.write(struct.pack('>i', 3107))
-        
-        buf.write(b'\x08')  # TAG_String
-        self._write_string(buf, "Name")
-        self._write_string(buf, "1.20.1")
-        
-        buf.write(b'\x00')  # End tag for Version
-        
-        buf.write(b'\x00')  # End tag for Data
-        
-        # Gzip compress
-        compressed = io.BytesIO()
-        with gzip.GzipFile(fileobj=compressed, mode='wb') as gz:
-            gz.write(buf.getvalue())
-        
-        return compressed.getvalue()
-    
+        s = self.SETTINGS
+        now_ms = int(datetime.now().timestamp() * 1000)
+
+        data = Compound({
+            "DataVersion": Int(self.data_version),
+            "version": Int(19133),                  # level format version (NOT the game version)
+            "LevelName": String(world_name),
+            "GameType": Int(s["gamemode"]),
+            "Difficulty": Byte(s["difficulty"]),
+            "DifficultyLocked": Byte(0),
+            "Hardcore": Byte(s["hardcore"]),
+            "allowCommands": Byte(s["allow_commands"]),
+            "LastPlayed": Long(now_ms),
+            "Time": Long(0),
+            "DayTime": Long(0),
+            "SpawnX": Int(0),
+            "SpawnY": Int(64),
+            "SpawnZ": Int(0),
+            "SpawnAngle": Float(0.0),
+            "clearWeatherTime": Int(0),
+            "rainTime": Int(0),
+            "thunderTime": Int(0),
+            "raining": Byte(0),
+            "thundering": Byte(0),
+            "WanderingTraderSpawnChance": Int(25),
+            "WanderingTraderSpawnDelay": Int(24000),
+            "initialized": Byte(0),
+            "WasModded": Byte(0),
+            "GameRules": Compound({
+                "keepInventory": String("true" if s["retain_inventory_on_death"] else "false"),
+                "doMobSpawning": String("true" if s["spawn_mobs"] else "false"),
+                "doMobLoot": String("true"),
+                "doTileDrops": String("true"),
+                "doEntityDrops": String("true"),
+                "doFireTick": String("true"),
+                "doDaylightCycle": String("true"),
+                "doWeatherCycle": String("true"),
+                "mobGriefing": String("true"),
+                "commandBlockOutput": String("true"),
+                "naturalRegeneration": String("true"),
+                "pvp": String("true" if s["pvp"] else "false"),
+                "showDeathMessages": String("true"),
+                "sendCommandFeedback": String("true"),
+                "randomTickSpeed": String("3"),
+                "spawnRadius": String("10"),
+            }),
+            "Version": Compound({
+                "Id": Int(self.data_version),
+                "Name": String(self.MINECRAFT_VERSION),
+                "Series": String("main"),
+                "Snapshot": Byte(0),
+            }),
+            "WorldGenSettings": Compound({
+                "seed": Long(seed),
+                "generate_features": Byte(s["generate_structures"]),
+                "bonus_chest": Byte(0),
+                "dimensions": Compound({}),
+            }),
+            "DataPacks": Compound({
+                "Enabled": nbtlib.List[String]([String("vanilla")]),
+                "Disabled": nbtlib.List[String]([]),
+            }),
+        })
+
+        nbt_file = File({"Data": data}, gzipped=True, root_name="")
+
+        # File.write() does NOT compress on its own; gzip manually so the
+        # output has the 0x1f 0x8b header Minecraft expects.
+        raw = io.BytesIO()
+        nbt_file.write(raw)
+        out = io.BytesIO()
+        with gzip.GzipFile(fileobj=out, mode="wb") as gz:
+            gz.write(raw.getvalue())
+        return out.getvalue()
+
     def create_world(self, seed: int, world_name: str = None) -> Path:
-        """
-        Create a new world directory with level.dat.
-        
-        Args:
-            seed: Minecraft world seed
-            world_name: Name of the world. If None, uses seed as name.
-            
-        Returns:
-            Path to the created world directory
-        """
+        """Create a single world folder with a valid level.dat."""
         if world_name is None:
             world_name = f"World_{seed}"
-        
+
         world_path = self.saves_dir / world_name
-        
-        # Check if world already exists
+
         if world_path.exists():
-            print(f"⚠️  World '{world_name}' already exists, skipping...")
+            print(f"  World '{world_name}' already exists, skipping...")
             return world_path
-        
-        # Create world directory
+
         world_path.mkdir(parents=True, exist_ok=True)
-        
-        # Create level.dat
-        level_dat_path = world_path / "level.dat"
-        level_dat_bytes = self.create_level_dat(seed, world_name)
-        with open(level_dat_path, 'wb') as f:
-            f.write(level_dat_bytes)
-        
-        # Create empty datapacks directory
-        datapacks_dir = world_path / "datapacks"
-        datapacks_dir.mkdir(exist_ok=True)
-        
-        print(f"✓ Created world: {world_name} (Seed: {seed})")
+
+        (world_path / "level.dat").write_bytes(
+            self.create_level_dat(seed, world_name)
+        )
+        (world_path / "datapacks").mkdir(exist_ok=True)
+
+        print(f"  Created: {world_name}  (seed: {seed})")
         return world_path
-    
+
     def generate_worlds(self, seeds: List[int], world_name_prefix: str = "World"):
-        """
-        Generate multiple worlds from a list of seeds.
-        
-        Args:
-            seeds: List of seed integers
-            world_name_prefix: Prefix for world names
-        """
-        print(f"\n{'='*60}")
-        print(f"Minecraft World Generator (Java Edition)")
-        print(f"{'='*60}")
-        print(f"Settings:")
+        """Create one world per seed."""
+        print("=" * 60)
+        print("Minecraft World Generator (Java Edition)")
+        print(f"Target version: {self.MINECRAFT_VERSION}  (DataVersion {self.data_version})")
+        print("=" * 60)
         for key, value in self.SETTINGS.items():
             print(f"  {key}: {value}")
-        print(f"{'='*60}\n")
-        
-        successful = 0
-        skipped = 0
-        
+        print("=" * 60)
+
+        created = 0
         for i, seed in enumerate(seeds, 1):
             try:
-                world_name = f"{world_name_prefix}_{i}_{seed}"
-                self.create_world(seed, world_name)
-                successful += 1
+                self.create_world(seed, f"{world_name_prefix}_{i}_{seed}")
+                created += 1
             except Exception as e:
-                print(f"✗ Failed to create world from seed {seed}: {e}")
-        
-        print(f"\n{'='*60}")
-        print(f"Complete! Created {successful}/{len(seeds)} worlds")
-        print(f"Worlds saved to: {self.saves_dir}")
-        print(f"{'='*60}\n")
+                print(f"  FAILED seed {seed}: {e}")
+
+        print("=" * 60)
+        print(f"Done. {created}/{len(seeds)} worlds written to:")
+        print(f"  {self.saves_dir}")
+        print("=" * 60)
 
 
 def load_seeds_from_file(filepath: str) -> List[int]:
-    """Load seeds from a file (one per line)."""
+    """Load seeds from a text file, one per line. '#' lines are comments."""
     seeds = []
-    with open(filepath, 'r') as f:
+    with open(filepath, "r") as f:
         for line in f:
             line = line.strip()
-            if line and not line.startswith('#'):  # Skip empty lines and comments
+            if line and not line.startswith("#"):
                 try:
                     seeds.append(int(line))
                 except ValueError:
-                    print(f"Warning: Invalid seed '{line}', skipping...")
+                    print(f"Warning: invalid seed '{line}', skipping.")
     return seeds
 
 
-# Example usage
 if __name__ == "__main__":
-    # Option 1: Hardcoded seed list
-    seeds = [
-        12345,
-        67890,
-        -999999,
-        999999,
-        2147483647,
-    ]
-    
-    # Option 2: Load from file
-    # seeds = load_seeds_from_file("seeds.txt")
-    
-    # Create generator and build worlds
+    # Option 1: load from seeds.txt (recommended)
+    if os.path.exists("seeds.txt"):
+        seeds = load_seeds_from_file("seeds.txt")
+    else:
+        # Option 2: hardcoded fallback
+        seeds = [12345, 67890, -999999, 999999, 2147483647]
+
     generator = MinecraftWorldGenerator()
     generator.generate_worlds(seeds, world_name_prefix="TestWorld")

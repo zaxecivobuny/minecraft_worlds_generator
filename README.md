@@ -1,80 +1,64 @@
 # Minecraft Worlds Generator
 
-Automatically generate Minecraft Java Edition single-player worlds from a list of seeds with predefined categorical settings.
+Generate Minecraft Java Edition single-player worlds from a list of seeds, all
+sharing the same predefined settings.
 
 ## Setup
 
-1. Install Python 3.7+
-2. Install dependencies:
-   ```
-   pip install -r requirements.txt
-   ```
+```
+pip install -r requirements.txt
+```
+
+## IMPORTANT: set your Minecraft version
+
+Open `minecraft_world_generator.py` and set this line near the top of the class
+to match the version you actually play:
+
+```python
+MINECRAFT_VERSION = "26.2"
+```
+
+If this is set HIGHER than your installed game, the worlds show
+"Failed to load world summary" and won't open. Supported values:
+1.20.x, 1.21.x, 26.1.2, 26.2 (see the DATA_VERSIONS table in the script).
+(To add another, put its DataVersion in the `DATA_VERSIONS` table.)
 
 ## Usage
 
-### Quick Start
-
-1. Edit `seeds.txt` and add your seeds (one per line)
-2. Configure settings in `minecraft_world_generator.py` (top of file, `SETTINGS` dict)
+1. Put your seeds in `seeds.txt`, one per line (`#` starts a comment).
+2. Adjust `SETTINGS` in the script if you want.
 3. Run:
-   ```
-   python minecraft_world_generator.py
-   ```
 
-### Configuration
+```
+python minecraft_world_generator.py
+```
 
-Open `minecraft_world_generator.py` and modify the `SETTINGS` dictionary:
+Worlds are written to your saves folder (auto-detected):
+- Windows: `%APPDATA%\.minecraft\saves`
+- macOS: `~/Library/Application Support/minecraft/saves`
+- Linux: `~/.minecraft/saves`
+
+## Settings
 
 ```python
 SETTINGS = {
-    "gamemode": 0,                      # 0=Survival, 1=Creative, 2=Adventure, 3=Spectator
-    "difficulty": 2,                    # 0=Peaceful, 1=Easy, 2=Normal, 3=Hard
-    "allow_commands": 1,                # Enable/disable command blocks
-    "pvp": 1,                           # Enable/disable PvP
-    "spawn_mobs": 1,                    # Mobs spawn or not
-    "spawn_animals": 1,                 # Animals spawn or not
-    "spawn_npc": 1,                     # NPCs spawn or not
-    "hardcore": 0,                      # Hardcore mode
-    "retain_inventory_on_death": 0,     # 0=drop on death, 1=keep inventory
-    "structures": 1,                    # Generate structures (temples, strongholds, etc)
-    "water_lake_chance": 1,             # Water lake generation frequency (1-100)
-    "lava_lake_chance": 2,              # Lava lake generation frequency (1-100)
-    "dungeon_chance": 1,                # Dungeon generation frequency (1-100)
+    "gamemode": 0,                   # 0=Survival, 1=Creative, 2=Adventure, 3=Spectator
+    "difficulty": 2,                 # 0=Peaceful, 1=Easy, 2=Normal, 3=Hard
+    "allow_commands": 0,             # 0=False, 1=True
+    "pvp": 1,                        # 0=False, 1=True
+    "spawn_mobs": 1,                 # 0=False, 1=True
+    "spawn_animals": 1,              # 0=False, 1=True
+    "spawn_npc": 1,                  # 0=False, 1=True
+    "hardcore": 0,                   # 0=False, 1=True
+    "retain_inventory_on_death": 0,  # 0=drop on death, 1=keep inventory
+    "generate_structures": 1,        # 0=False, 1=True
 }
 ```
 
-### Seed Input Methods
-
-**Method 1: seeds.txt file** (recommended)
-```
-# seeds.txt
-12345
-67890
--999999
-# This is a comment
-999999
-```
-
-Then uncomment this line in the script:
-```python
-seeds = load_seeds_from_file("seeds.txt")
-```
-
-**Method 2: Hardcoded list**
-Edit the bottom of the script:
-```python
-seeds = [12345, 67890, -999999, 999999]
-```
-
-## Output
-
-Worlds are created in your Minecraft saves directory (typically `%APPDATA%\.minecraft\saves` on Windows).
-
-World names follow the pattern: `WorldName_1_seed`, `WorldName_2_seed`, etc.
-
 ## Notes
 
-- Worlds won't have pre-generated chunks until you load them in Minecraft
-- Existing worlds are automatically skipped
-- Version ID in the script matches Minecraft 1.20.1 — update if you use a different version
-- Comments in seeds.txt (lines starting with `#`) are ignored
+- Worlds have no pre-generated terrain yet; Minecraft generates it the first
+  time you open each world (normal behaviour).
+- Existing world folders are skipped, not overwritten.
+- If you previously ran an older, broken version of this script, delete the old
+  `TestWorld_*` folders from your saves directory before regenerating.
