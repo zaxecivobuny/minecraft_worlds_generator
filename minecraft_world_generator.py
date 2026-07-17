@@ -13,14 +13,9 @@ from pathlib import Path
 from typing import List, Dict, Any
 from datetime import datetime
 import subprocess
+import io
 
-# Try to import nbtlib; if missing, provide install instructions
-try:
-    import nbtlib
-except ImportError:
-    print("ERROR: nbtlib not found. Install it with:")
-    print("  pip install nbtlib")
-    sys.exit(1)
+# No external dependencies needed - using manual NBT binary encoding
 
 
 class MinecraftWorldGenerator:
@@ -67,6 +62,36 @@ class MinecraftWorldGenerator:
             print(f"Is Minecraft installed? Check your .minecraft location.")
             sys.exit(1)
     
+    def _write_nbt_tag(self, name: str, value: Any) -> bytes:
+        """Manually encode a single NBT tag to bytes."""
+        buf = io.BytesIO()
+        
+        if isinstance(value, dict):
+            # TAG_Compound
+            buf.write(b'\x0a')  # Tag type 10 = Compound
+            self._write_string(buf, name)
+            for k, v in value.items():
+                buf.write(self._write_nbt_tag(k, v))
+            buf.write(b'\x00')  # End tag
+        elif isinstance(value, str):
+            # TAG_String
+            buf.write(b'\x08')  # Tag type 8 = String
+            self._write_string(buf, name)
+            self._write_string(buf, value)
+        elif isinstance(value, int):
+            # TAG_Long or TAG_Int (use Long for large values)
+            buf.write(b'\x04')  # Tag type 4 = Int
+            self._write_string(buf, name)
+            buf.write(struct.pack('>i', value))
+        
+        return buf.getvalue()
+    
+    def _write_string(self, buf: io.BytesIO, s: str):
+        """Write a UTF-8 string with 2-byte length prefix."""
+        encoded = s.encode('utf-8')
+        buf.write(struct.pack('>H', len(encoded)))
+        buf.write(encoded)
+    
     def create_level_dat(self, seed: int, world_name: str) -> bytes:
         """
         Create a level.dat file (NBT format) for the given seed.
@@ -78,54 +103,101 @@ class MinecraftWorldGenerator:
         Returns:
             Gzipped NBT data as bytes
         """
-        import io
+        buf = io.BytesIO()
         
-        # Build the NBT structure as nested dicts
-        nbt_data = {
-            "Data": {
-                "Seed": seed,
-                "GameType": self.SETTINGS["gamemode"],
-                "Difficulty": self.SETTINGS["difficulty"],
-                "DifficultyLocked": self.SETTINGS["difficulty"],
-                "Hardcore": self.SETTINGS["hardcore"],
-                "LevelName": world_name,
-                "LastPlayed": int(datetime.now().timestamp() * 1000),
-                "Time": 0,
-                "DayTime": 0,
-                "SpawnX": 0,
-                "SpawnY": 64,
-                "SpawnZ": 0,
-                "GameRules": {
-                    "commandBlockOutput": "1",
-                    "doCommandBlocks": "1" if self.SETTINGS["allow_commands"] else "0",
-                    "doDayLightCycle": "1",
-                    "doEntityDrops": "1",
-                    "doFireTick": "1",
-                    "doMobSpawning": "1" if self.SETTINGS["spawn_mobs"] else "0",
-                    "doTileDrops": "1",
-                    "keepInventory": "1" if self.SETTINGS["retain_inventory_on_death"] else "0",
-                    "logAdminCommands": "1",
-                    "mobGriefing": "1",
-                    "pvp": "1" if self.SETTINGS["pvp"] else "0",
-                    "randomTickSpeed": "3",
-                    "sendCommandFeedback": "1",
-                    "showDeathMessages": "1",
-                    "spawnAnimals": "1" if self.SETTINGS["spawn_animals"] else "0",
-                    "spawnMonsters": "1" if self.SETTINGS["spawn_mobs"] else "0",
-                    "spawnNPCs": "1" if self.SETTINGS["spawn_npc"] else "0",
-                },
-                "Version": {
-                    "Id": 3107,
-                    "Name": "1.20.1",
-                },
-                "WorldGenSettings": {},
-            }
+        # TAG_Compound (root)
+        buf.write(b'\x0a')  # Tag type 10 = Compound
+        self._write_string(buf, "")  # Root name is empty
+        
+        # Data compound
+        buf.write(b'\x0a')  # Compound tag
+        self._write_string(buf, "Data")
+        
+        # Write individual tags
+        buf.write(b'\x03')  # TAG_Int
+        self._write_string(buf, "GameType")
+        buf.write(struct.pack('>i', self.SETTINGS["gamemode"]))
+        
+        buf.write(b'\x01')  # TAG_Byte
+        self._write_string(buf, "Difficulty")
+        buf.write(struct.pack('B', self.SETTINGS["difficulty"]))
+        
+        buf.write(b'\x01')  # TAG_Byte
+        self._write_string(buf, "Hardcore")
+        buf.write(struct.pack('B', self.SETTINGS["hardcore"]))
+        
+        buf.write(b'\x08')  # TAG_String
+        self._write_string(buf, "LevelName")
+        self._write_string(buf, world_name)
+        
+        buf.write(b'\x04')  # TAG_Long (seed as int for now)
+        self._write_string(buf, "Seed")
+        buf.write(struct.pack('>q', seed))  # 8-byte long
+        
+        buf.write(b'\x04')  # TAG_Long
+        self._write_string(buf, "Time")
+        buf.write(struct.pack('>q', 0))
+        
+        buf.write(b'\x04')  # TAG_Long
+        self._write_string(buf, "DayTime")
+        buf.write(struct.pack('>q', 0))
+        
+        buf.write(b'\x04')  # TAG_Long
+        self._write_string(buf, "LastPlayed")
+        buf.write(struct.pack('>q', int(datetime.now().timestamp() * 1000)))
+        
+        buf.write(b'\x03')  # TAG_Int
+        self._write_string(buf, "SpawnX")
+        buf.write(struct.pack('>i', 0))
+        
+        buf.write(b'\x03')  # TAG_Int
+        self._write_string(buf, "SpawnY")
+        buf.write(struct.pack('>i', 64))
+        
+        buf.write(b'\x03')  # TAG_Int
+        self._write_string(buf, "SpawnZ")
+        buf.write(struct.pack('>i', 0))
+        
+        # GameRules compound
+        buf.write(b'\x0a')  # Compound
+        self._write_string(buf, "GameRules")
+        
+        # Write game rules
+        rules = {
+            "keepInventory": "1" if self.SETTINGS["retain_inventory_on_death"] else "0",
+            "doMobSpawning": "1" if self.SETTINGS["spawn_mobs"] else "0",
+            "pvp": "1" if self.SETTINGS["pvp"] else "0",
         }
         
-        # Save using nbtlib
-        output = io.BytesIO()
-        nbtlib.save(nbt_data, output, gzipped=True)
-        return output.getvalue()
+        for rule_name, rule_value in rules.items():
+            buf.write(b'\x08')  # TAG_String
+            self._write_string(buf, rule_name)
+            self._write_string(buf, rule_value)
+        
+        buf.write(b'\x00')  # End tag for GameRules
+        
+        # Version compound
+        buf.write(b'\x0a')  # Compound
+        self._write_string(buf, "Version")
+        
+        buf.write(b'\x03')  # TAG_Int
+        self._write_string(buf, "Id")
+        buf.write(struct.pack('>i', 3107))
+        
+        buf.write(b'\x08')  # TAG_String
+        self._write_string(buf, "Name")
+        self._write_string(buf, "1.20.1")
+        
+        buf.write(b'\x00')  # End tag for Version
+        
+        buf.write(b'\x00')  # End tag for Data
+        
+        # Gzip compress
+        compressed = io.BytesIO()
+        with gzip.GzipFile(fileobj=compressed, mode='wb') as gz:
+            gz.write(buf.getvalue())
+        
+        return compressed.getvalue()
     
     def create_world(self, seed: int, world_name: str = None) -> Path:
         """
